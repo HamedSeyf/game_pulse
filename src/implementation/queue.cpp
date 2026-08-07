@@ -1,82 +1,88 @@
 module game_pulse.queue;
 
 import <cassert>;
+import <stdexcept>;
 
-size_t Queue::GetCurrentSize() const
+Queue::Queue(const std::size_t queue_capacity)
+    : _events_queue { queue_capacity }
 {
-    std::lock_guard<std::mutex> lock(_queue_mutex);
+    if (queue_capacity == 0)
+    {
+        throw std::invalid_argument{ "Queue capacity must be greater than zero." };
+    }
+}
+
+std::size_t Queue::GetCurrentSize() const
+{
+    std::lock_guard<std::mutex> lock(_queue_and_state_mutex);
     return _events_queue.size();
 }
 
-bool Queue::Cofigure(const std::shared_ptr<const Configuration>& config)
+bool Queue::ShutDown(const bool graceful)
 {
-    assert(config != nullptr && GetCapacity() == 0);
-
     {
-        std::lock_guard<std::mutex> lock(_queue_mutex);
-        _queue_capacity.store(config->queue_capacity);
-    }
+        std::lock_guard<std::mutex> lock(_queue_and_state_mutex);
 
-    assert(GetCapacity() > 0);
+        if (GetState() != State::ready)
+        {
+            assert(false && "Multiple Queue::ShutDown called.");
+            return false;
+        }
 
-    return true;
-}
+        if (!graceful)
+        {
+            _events_queue.clear();
+        }
 
-void Queue::ShutDown(const bool graceful)
-{
-    assert(GetState() == State::ready);
-
-    {
-        // TODO: Question: is this lock needed and in which scenarios if yes?
-        std::lock_guard<std::mutex> lock(_queue_mutex);
-
-        State new_state =
-            _events_queue.empty() ? State::shut_down : (graceful ? State::shutting_down_gracefully : State::shutting_down_ungracefully);
+        const State new_state = (_events_queue.empty() ? State::shut_down : State::shutting_down_gracefully);
             
         _state.store(new_state, std::memory_order_relaxed);
     }
 
     _queue_push_cv.notify_all();
     _queue_pop_cv.notify_all();
-}
 
-std::expected<bool, std::string> Queue::WaitAndPush(Event event)
-{
-    std::unique_lock<std::mutex> lock(_queue_mutex);
-
-    if (GetState() != State::ready)
-    {
-        return std::unexpected{ std::string{"Queue either shutting down or already shut down"} };
-    }
-
-    _queue_push_cv.wait(
-        lock,
-        [this]
-        {
-            return _events_queue.size() < _queue_capacity.load(std::memory_order_relaxed) || GetState() != State::ready;
-        }
-    );
-
-    if (GetState() != State::ready)
-    {
-        return std::unexpected{ std::string{"Queue either shutting down or already shut down"} };
-    }
-
-    _events_queue.emplace(std::move(event));
-
-    _queue_pop_cv.notify_one();
-    
     return true;
 }
 
-std::expected<std::unique_ptr<Event>, std::string> Queue::WaitAndPop()
+std::expected<void, Queue::QueueError> Queue::WaitAndPush(Event event)
 {
-    std::unique_lock lock{ _queue_mutex };
-
-    if (const auto state = GetState(); state == State::shutting_down_ungracefully || state == State::shut_down)
     {
-        return std::unexpected{ std::string{"Queue either shutting down or already shut down"} };
+        std::unique_lock<std::mutex> lock(_queue_and_state_mutex);
+
+        _queue_push_cv.wait(
+            lock,
+            [this]
+            {
+                return !_events_queue.full() || GetState() != State::ready;
+            }
+        );
+
+        if (GetState() != State::ready)
+        {
+            return std::unexpected{ QueueError::already_shut_down };
+        }
+
+        if (!_events_queue.try_emplace(std::move(event)))
+        {
+            assert(false && "Broken internal logic as _events_queue should not be full and std::move should work on event objects.");
+            return std::unexpected{ QueueError::internal_error };
+        }
     }
+
+    _queue_pop_cv.notify_one();
+
+    return {};
+}
+
+std::expected<std::span<Event>, Queue::QueueError> Queue::WaitAndPopBatch(std::span<Event> destination)
+{
+    if (destination.size() == 0)
+    {
+        return std::unexpected{ QueueError::bad_arguments };
+    }
+
+    std::unique_lock lock{ _queue_and_state_mutex };
 
     _queue_pop_cv.wait(
         lock,
@@ -86,29 +92,31 @@ std::expected<std::unique_ptr<Event>, std::string> Queue::WaitAndPop()
         }
     );
 
-    if (const auto state = GetState(); state == State::shutting_down_ungracefully || state == State::shut_down)
+    const State cached_state = GetState();
+
+    if (cached_state == State::shut_down)
     {
-        return std::unexpected{ std::string{"Queue either shutting down or already shut down"} };
+        return std::unexpected{ QueueError::already_shut_down };
     }
 
-    if (_events_queue.empty())
+    const bool was_full = _events_queue.full();
+
+    assert(!_events_queue.empty() && "State transition and mutex lock logic should prevent this scenario to occur.");
+
+    const auto retval_span = _events_queue.pop_into(destination);
+
+    if (cached_state == State::shutting_down_gracefully && _events_queue.empty())
     {
-        if (const auto state = GetState(); state == State::shutting_down_gracefully)
-        {
-            _state.store(State::shut_down);
-        }
-        return;
+        _state.store(State::shut_down, std::memory_order_relaxed);
     }
 
-    auto front_event = std::move(_events_queue.front());
-    _events_queue.pop();
+    lock.unlock();
 
-    _queue_push_cv.notify_one();
-
-    if (GetState() == State::shutting_down_gracefully && _events_queue.empty())
+    // Check whether or not we should notify all waiters
+    if (cached_state == State::ready && was_full)
     {
-        _state.store(State::shut_down);
+        _queue_push_cv.notify_all();
     }
 
-    return front_event;
+    return retval_span;
 }

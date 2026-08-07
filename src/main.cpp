@@ -1,5 +1,6 @@
 
 #include <charconv>
+#include <vector>
 #include <memory>
 #include <string_view>
 #include <system_error>
@@ -77,7 +78,14 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv)
     }
 
     // TODO: Hamed should modify the logic here later on
-    Queue::GetInstance().Cofigure(cfg);
+    Queue queue { cfg->queue_capacity };
+
+    std::vector<Event> destination_for_testing(cfg->batch_size);
+
+    if (const auto returned_value = queue.WaitAndPopBatch(destination_for_testing); !returned_value.has_value())
+    {
+        // TODO: for hamed: Something went wrong so log it here ???
+    }
 
     return 1;
 }
