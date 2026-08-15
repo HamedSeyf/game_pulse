@@ -12,7 +12,7 @@ Queue::Queue(const std::size_t queue_capacity)
     }
 }
 
-std::size_t Queue::GetCurrentSize() const
+std::size_t Queue::GetSize() const
 {
     std::lock_guard<std::mutex> lock(_queue_and_state_mutex);
     return _events_queue.size();

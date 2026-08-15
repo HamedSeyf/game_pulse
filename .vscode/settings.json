@@ -1,5 +1,0 @@
-{
-    // C/C++ IntelliSense does not yet reliably resolve C++20 named modules.
-    // The MSVC/CMake build remains the source of compiler diagnostics.
-    "C_Cpp.errorSquiggles": "disabled"
-}

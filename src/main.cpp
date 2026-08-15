@@ -7,6 +7,7 @@
 
 import game_pulse.domain;
 import game_pulse.queue;
+import game_pulse.pipeline;
 
 int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv)
 {
@@ -77,15 +78,9 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv)
         }
     }
 
-    // TODO: Hamed should modify the logic here later on
-    Queue queue { cfg->queue_capacity };
+    std::shared_ptr<Queue> queue = std::make_shared<Queue>(cfg->queue_capacity);
 
-    std::vector<Event> destination_for_testing(cfg->batch_size);
-
-    if (const auto returned_value = queue.WaitAndPopBatch(destination_for_testing); !returned_value.has_value())
-    {
-        // TODO: for hamed: Something went wrong so log it here ???
-    }
+    std::shared_ptr<Pipeline> pipeline = std::make_shared<Pipeline>(queue, cfg->batch_size);
 
     return 1;
 }

@@ -43,7 +43,7 @@ export
 
         explicit Queue(const std::size_t queue_capacity);
 
-        [[nodiscard]] std::size_t GetCurrentSize() const;
+        [[nodiscard]] std::size_t GetSize() const;
         [[nodiscard]] std::size_t GetCapacity() const noexcept { return _events_queue.capacity(); }
         [[nodiscard]] State GetState() const noexcept { return _state.load(std::memory_order_relaxed); }
 
