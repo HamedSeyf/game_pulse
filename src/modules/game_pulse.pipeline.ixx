@@ -1,5 +1,6 @@
 module;
 
+#include "hamed_common/generic_types.h"
 #include "hamed_common/subscription_registry.h"
 
 export module game_pulse.pipeline;
@@ -11,66 +12,60 @@ import <string>;
 import <expected>;
 import <memory>;
 import <span>;
+import <thread>;
+import <stop_token>;
 
 export
 {
 
-    class ProcessorInterface
+    namespace PipelineTypes
     {
-    public:
-        // Processes events synchronously.
-        // `events`, and any pointer/reference derived from it, are valid only for the
-        // duration of this call. A processor that needs the events afterward must copy
-        // them into processor-owned storage before returning.
-        virtual void ProcessEventsSynchronously(const std::span<const Event>& events) = 0;
-        virtual ~ProcessorInterface() = default;
-    };
-
-    class Pipeline final
-    {
-    public:
-
-        enum class PipelineState
+        class ProcessorInterface
         {
-            NotStarted = 0,
-            InProgress,
-            Finishing_Gracefully,
-            Stopped,
+        public:
+            // Processes events synchronously.
+            // `events`, and any pointer/reference derived from it, are valid only for the
+            // duration of this call. A processor that needs the events afterward must copy
+            // them into processor-owned storage before returning.
+            virtual void ProcessEventsSynchronously(const std::span<const EventTypes::Event>& events) = 0;
+            virtual ~ProcessorInterface() = default;
         };
 
-        enum class PipelineError
+        enum class Error
         {
             UnRegisterFailed = 0,
-            PipelineAlreadyStarted,
-            PipelineNotYetStarted,
         };
+    }
 
-        using TProsessorHandle = std::uint64_t;
+    class Pipeline final : public TStateMachine<>
+    {
+    public:
+
+        using TProcessorHandle = std::uint64_t;
 
         explicit Pipeline(std::shared_ptr<Queue> queue, const std::size_t batch_size);
+        ~Pipeline();
 
-        std::expected<void, PipelineError> Start();
-        std::expected<void, PipelineError> Stop(const bool graceful);
+        std::expected<TProcessorHandle, PipelineTypes::Error> RegisterProcessor(std::shared_ptr<PipelineTypes::ProcessorInterface> processor);
+        std::expected<void, PipelineTypes::Error> UnRegisterProcessor(const TProcessorHandle& handle);
 
-        [[nodiscard]] PipelineState GetState() const noexcept { return _state->load(std::memory_order_relaxed); }
+        void JoinAndWait();
 
-        std::expected<TProsessorHandle, PipelineError> RegisterProsessor(std::shared_ptr<ProcessorInterface> processor);
-        std::expected<void, PipelineError> UnRegisterProsessor(const TProsessorHandle& handle);
+    protected:
+        
+        virtual void OnStateTransitionLocked(const TStateMachineState newState) noexcept override;
 
     private:
 
         std::shared_ptr<Queue> _queue;
-        size_t _batch_size;
+        std::size_t _batch_size;
 
         inline static constexpr std::string_view SubscriptionRegistryKey = "PipelineEvents";
 
-        TSubscriptionRegistry<std::shared_ptr<ProcessorInterface>, std::string_view, TProsessorHandle> _subscriptionRegistry;
-
-        std::mutex _state_mutex;
-        std::shared_ptr<std::atomic<PipelineState>> _state;
+        TSubscriptionRegistry<std::shared_ptr<PipelineTypes::ProcessorInterface>, std::string_view, TProcessorHandle> _subscriptionRegistry;
 
         std::jthread _workerThread;
 
-        void WorkerMain(std::stop_token stop_token);
+        void WorkerMain(std::stop_token stopToken);
     };
 }

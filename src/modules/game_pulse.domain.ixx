@@ -1,5 +1,6 @@
 export module game_pulse.domain;
 
+import <array>;
 import <cstddef>;
 import <cstdint>;
 import <tuple>;
@@ -8,24 +9,70 @@ export
 {
 
     using T_ID = std::uint64_t;
+    using T_Tick = std::uint64_t;
+    using TPlayerHealthType = uint64_t;
+    using TPlayerPositionType = std::array<double, 2>;
+    inline constexpr TPlayerHealthType PlayerMaxHealth = 10000;
 
-    using T_Position = std::tuple<double, double, double>;
-
-    enum class Priority
+    namespace EventTypes
     {
-        highest = 0,
-        high,
-        medium,
-        low,
-        lowest
-    };
+        enum class EventType : std::uint8_t
+        {
+            Spawn,
+            Move,
+            Shot,
+            Death
+        };
 
-    struct Event
+        struct SpawnEvent
+        {
+            T_ID playerId;
+            TPlayerPositionType position;
+        };
+
+        struct MoveEvent
+        {
+            T_ID playerId;
+            TPlayerPositionType position;
+        };
+
+        struct ShotEvent
+        {
+            T_ID shooterId;
+            T_ID targetId;
+            TPlayerHealthType damage;
+        };
+
+        struct DeathEvent
+        {
+            T_ID playerId;
+            T_ID killerId;
+        };
+
+        struct Event
+        {
+            T_ID id;
+            T_Tick tick;
+            EventType type;
+
+            union
+            {
+                SpawnEvent spawn;
+                MoveEvent move;
+                ShotEvent shot;
+                DeathEvent death;
+            };
+        };
+    }
+
+    namespace SnapshotTypes
     {
-        T_ID id;
-        std::uint64_t tick;
-        Priority priority;
-    };
+        struct PlayerStatus
+        {
+            TPlayerHealthType Health = PlayerMaxHealth;
+            TPlayerPositionType Position{ 0.0, 0.0 };
+        };
+    }
 
     struct Configuration final
     {

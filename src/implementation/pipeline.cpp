@@ -13,65 +13,73 @@ Pipeline::Pipeline(std::shared_ptr<Queue> queue, const std::size_t batch_size)
     assert(_batch_size <= _queue->GetCapacity() && "Batch size bigger than queue's capacity is not useful.");
 }
 
-std::expected<void, Pipeline::PipelineError> Pipeline::Start()
+Pipeline::~Pipeline()
 {
-    std::lock_guard<std::mutex> lock(_state_mutex);
-
-    if (GetState() == PipelineState::InProgress)
-    {
-        return std::unexpected{ PipelineError::PipelineAlreadyStarted };
-    }
-
-    _state->store(PipelineState::InProgress);
-
-    _workerThread = std::jthread([this](std::stop_token stopToken)
-        {
-            WorkerMain(stopToken);
-        }
-    );
-
-    return {};
+    SwitchToState(TStateMachineState::Stopped);
 }
 
-std::expected<void, Pipeline::PipelineError> Pipeline::Stop([[maybe_unused]] const bool graceful)
+std::expected<Pipeline::TProcessorHandle, PipelineTypes::Error> Pipeline::RegisterProcessor(std::shared_ptr<PipelineTypes::ProcessorInterface> processor)
 {
-    std::lock_guard<std::mutex> lock(_state_mutex);
-
-    if (GetState() != PipelineState::InProgress)
-    {
-        return std::unexpected{ PipelineError::PipelineNotYetStarted };
-    }
-
-    if (graceful)
-    {
-        _state->store(PipelineState::Finishing_Gracefully);
-    }
-    else
-    {
-        _workerThread.request_stop();
-    }
-
-    return {};
-}
-
-std::expected<Pipeline::TProsessorHandle, Pipeline::PipelineError> Pipeline::RegisterProsessor(std::shared_ptr<ProcessorInterface> processor)
-{
-    const TProsessorHandle subscriptionHandle = _subscriptionRegistry.subscribe(processor, Pipeline::SubscriptionRegistryKey);
+    const TProcessorHandle subscriptionHandle = _subscriptionRegistry.subscribe(processor, Pipeline::SubscriptionRegistryKey);
     return { subscriptionHandle };
 }
 
-std::expected<void, Pipeline::PipelineError> Pipeline::UnRegisterProsessor(const TProsessorHandle& handle)
+std::expected<void, PipelineTypes::Error> Pipeline::UnRegisterProcessor(const TProcessorHandle& handle)
 {
     const bool success = _subscriptionRegistry.unsubscribe(handle);
-    // TODO: question for Codex, are we handling potential errors and/or exceptions well in this func?
-    return success ? std::expected<void, Pipeline::PipelineError>{} : std::unexpected{ Pipeline::PipelineError::UnRegisterFailed };
+    return success ? std::expected<void, PipelineTypes::Error>{} : std::unexpected{ PipelineTypes::Error::UnRegisterFailed };
+}
+
+void Pipeline::JoinAndWait()
+{
+    if (_workerThread.joinable())
+    {
+        _workerThread.join();
+    }
+}
+
+void Pipeline::OnStateTransitionLocked(const TStateMachineState newState) noexcept
+{
+    TStateMachine::OnStateTransitionLocked(newState);
+
+    try
+    {
+        if (newState == TStateMachineState::InProgress)
+        {
+            _queue->SwitchToState(TStateMachineState::InProgress);
+
+            _workerThread = std::jthread([this](std::stop_token stopToken)
+                {
+                    WorkerMain(stopToken);
+                }
+            );
+        }
+        else if (newState == TStateMachineState::Stopping_Gracefully)
+        {
+            _queue->SwitchToState(TStateMachineState::Stopping_Gracefully);
+        }
+        else if (newState == TStateMachineState::Stopped)
+        {
+            _queue->SwitchToState(TStateMachineState::Stopped);
+
+            _workerThread.request_stop();
+        }
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << e.what() << '\n';
+    }
+    catch (...)
+    {
+        std::cerr << "Unknown non-std::exception thrown inside Pipeline::OnStateTransitionLocked.\n";
+    }
 }
 
 void Pipeline::WorkerMain(std::stop_token stopToken)
 {
-    std::vector<Event> eventsBatchBuffer(_batch_size, {});
+    std::vector<EventTypes::Event> eventsBatchBuffer(_batch_size, {});
 
-    while (!stopToken.stop_requested() || (GetState() == PipelineState::Finishing_Gracefully))
+    while (!stopToken.stop_requested() || (GetState() == TStateMachineState::Stopping_Gracefully))
     {
         const auto expectedEvents = _queue->WaitAndPopBatch(eventsBatchBuffer);
 
@@ -79,14 +87,14 @@ void Pipeline::WorkerMain(std::stop_token stopToken)
         {
             switch (expectedEvents.error())
             {
-            case Queue::QueueError::bad_arguments:
+            case QueueTypes::Error::bad_arguments:
                 assert(false && "Pipeline passed invalid arguments to Queue::WaitAndPopBatch.");
                 break;
 
-            case Queue::QueueError::already_shut_down:
+            case QueueTypes::Error::queue_not_started_or_shut_down:
                 break;
 
-            case Queue::QueueError::internal_error:
+            case QueueTypes::Error::internal_error:
                 assert(false && "Queue::WaitAndPopBatch encountered an internal error.");
                 break;
             }
@@ -108,11 +116,20 @@ void Pipeline::WorkerMain(std::stop_token stopToken)
                 // For now we keep it to a simple cerr as proper logging is not within the scope of this code demonstration
                 std::cerr << e.what() << '\n';
             }
+            catch (...)
+            {
+                assert(false && "Subscribers are supposed to gracefully handle events without throwing.");
+                // For now we keep it to a simple cerr as proper logging is not within the scope of this code demonstration
+                std::cerr << "Unknown non-std::exception thrown by subscriber.\n";
+            }
         }
     }
 
+    if (GetState() != TStateMachineState::Stopped)
     {
-        std::lock_guard<std::mutex> lock(_state_mutex);
-        _state->store(PipelineState::Stopped);
+        if (const auto stopResult = SwitchToState(TStateMachineState::Stopped); !stopResult)
+        {
+            assert(false && "Pipeline failed to transition to Stopped state on its final thread exit.");
+        }
     }
 }

@@ -7,10 +7,8 @@ export module game_pulse.queue;
 import game_pulse.domain;
 
 import <atomic>;
-import <condition_variable>;
 import <cstddef>;
 import <expected>;
-import <mutex>;
 import <span>;
 
 template<typename T>
@@ -23,47 +21,41 @@ concept NothrowQueuePayload =
 export
 {
 
-    class Queue final
+    namespace QueueTypes
     {
-    public:
-
-        enum class State
-        {
-            ready = 0,
-            shutting_down_gracefully,
-            shut_down,
-        };
-
-        enum class QueueError
+        enum class Error
         {
             bad_arguments = 0,
-            already_shut_down,
             internal_error,
+            queue_not_started_or_shut_down,
         };
+    }
+
+    class Queue final : public TStateMachine<>
+    {
+    public:
 
         explicit Queue(const std::size_t queue_capacity);
 
         [[nodiscard]] std::size_t GetSize() const;
         [[nodiscard]] std::size_t GetCapacity() const noexcept { return _events_queue.capacity(); }
-        [[nodiscard]] State GetState() const noexcept { return _state.load(std::memory_order_relaxed); }
 
-        bool ShutDown(const bool graceful);
+        std::expected<void, QueueTypes::Error> WaitAndPush(EventTypes::Event event);
+        std::expected<std::span<EventTypes::Event>, QueueTypes::Error> WaitAndPopBatch(std::span<EventTypes::Event> destination);
 
-        std::expected<void, QueueError> WaitAndPush(Event event);
-        std::expected<std::span<Event>, QueueError> WaitAndPopBatch(std::span<Event> destination);
+    protected:
+        
+        virtual void OnStateTransitionLocked(const TStateMachineState newState) noexcept override;
+        virtual void OnStateTransitionUnlocked(const TStateMachineState newState) noexcept override;
 
     private:
 
-        static_assert(NothrowQueuePayload<Event>, "Queue requires a nothrow-movable Event payload.");
+        static_assert(NothrowQueuePayload<EventTypes::Event> && std::is_trivially_copyable_v<EventTypes::Event>, "Queue requires a trivially copyable & nothrow-movable Event payload.");
 
-        // _state is atomic to support cheap external snapshots such as GetState() without lock; However, its changes are done under _queue_and_state_mutex lock
-        std::atomic<State> _state { State::ready };
-
-        mutable std::mutex _queue_and_state_mutex;
         std::condition_variable _queue_push_cv;
         std::condition_variable _queue_pop_cv;
 
-        TRingQueue<Event> _events_queue;
+        TRingQueue<EventTypes::Event> _events_queue;
 
     };
 

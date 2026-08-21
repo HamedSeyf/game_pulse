@@ -1,10 +1,12 @@
 
+#include <cassert>
 #include <charconv>
 #include <vector>
 #include <memory>
 #include <string_view>
 #include <system_error>
 
+import game_pulse.analytics;
 import game_pulse.domain;
 import game_pulse.queue;
 import game_pulse.pipeline;
@@ -78,9 +80,29 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv)
         }
     }
 
+    std::shared_ptr<Analytics> analytics = std::make_shared<Analytics>();
     std::shared_ptr<Queue> queue = std::make_shared<Queue>(cfg->queue_capacity);
-
     std::shared_ptr<Pipeline> pipeline = std::make_shared<Pipeline>(queue, cfg->batch_size);
+
+    if (const auto result = pipeline->RegisterProcessor(analytics); !result)
+    {
+        assert(false && "Failed to register the analytics.");
+        return 0;
+    }
+
+    if (const auto result = analytics->SwitchToState(TStateMachineState::InProgress); !result)
+    {
+        assert(false && "Failed to start the analytics.");
+        return 0;
+    }
+
+    if (const auto result = pipeline->SwitchToState(TStateMachineState::InProgress); !result)
+    {
+        assert(false && "Failed to start the pipeline.");
+        return 0;
+    }
+
+    pipeline->JoinAndWait();
 
     return 1;
 }
