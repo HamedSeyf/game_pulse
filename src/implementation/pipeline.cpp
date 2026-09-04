@@ -1,14 +1,23 @@
+module;
+
+#include "hamed_common/platform.h"
+
 module game_pulse.pipeline;
 
+import game_pulse.queue;
+
+import <algorithm>;
 import <cassert>;
 import <iostream>;
+import <tuple>;
 
-Pipeline::Pipeline(std::shared_ptr<Queue> queue, const std::size_t batch_size)
-    : _queue(std::move(queue)), _batch_size(batch_size)
+
+Pipeline::Pipeline(std::shared_ptr<TickClock> tickClock, std::shared_ptr<Queue> queue, const std::size_t batchSize)
+    : _tickClock(std::move(tickClock)), _queue(std::move(queue)), _batch_size(batchSize)
 {
-    if (!_queue || _batch_size == 0)
+    if (!_tickClock || !_queue || _batch_size == 0)
     {
-        throw std::invalid_argument{ "Invalid Queue passed to Pipeline's ctor." };
+        throw std::invalid_argument{ "Invalid tickClock, queue or batchSize passed to Pipeline's ctor." };
     }
     assert(_batch_size <= _queue->GetCapacity() && "Batch size bigger than queue's capacity is not useful.");
 }
@@ -20,14 +29,24 @@ Pipeline::~Pipeline()
 
 std::expected<Pipeline::TProcessorHandle, PipelineTypes::Error> Pipeline::RegisterProcessor(std::shared_ptr<PipelineTypes::ProcessorInterface> processor)
 {
-    const TProcessorHandle subscriptionHandle = _subscriptionRegistry.subscribe(processor, Pipeline::SubscriptionRegistryKey);
-    return { subscriptionHandle };
+    // TODO: do we need a locking mechanism here as well similar to Queue?
+    const bool foundElement = _subscriptionRegistry.forEachSubscribedObject(Pipeline::SubscriptionRegistryKey, [&processor](const auto& currentProcessor)
+        {
+            return (currentProcessor == processor);
+        });
+
+    if (foundElement)
+    {
+        return std::unexpected{ PipelineTypes::Error::processor_already_registered };
+    }
+
+    return { _subscriptionRegistry.subscribe(processor, Pipeline::SubscriptionRegistryKey) };
 }
 
 std::expected<void, PipelineTypes::Error> Pipeline::UnRegisterProcessor(const TProcessorHandle& handle)
 {
     const bool success = _subscriptionRegistry.unsubscribe(handle);
-    return success ? std::expected<void, PipelineTypes::Error>{} : std::unexpected{ PipelineTypes::Error::UnRegisterFailed };
+    return success ? std::expected<void, PipelineTypes::Error>{} : std::unexpected{ PipelineTypes::Error::processor_not_registered };
 }
 
 void Pipeline::JoinAndWait()
@@ -46,22 +65,14 @@ void Pipeline::OnStateTransitionLocked(const TStateMachineState newState) noexce
     {
         if (newState == TStateMachineState::InProgress)
         {
-            _queue->SwitchToState(TStateMachineState::InProgress);
-
             _workerThread = std::jthread([this](std::stop_token stopToken)
                 {
                     WorkerMain(stopToken);
                 }
             );
         }
-        else if (newState == TStateMachineState::Stopping_Gracefully)
-        {
-            _queue->SwitchToState(TStateMachineState::Stopping_Gracefully);
-        }
         else if (newState == TStateMachineState::Stopped)
         {
-            _queue->SwitchToState(TStateMachineState::Stopped);
-
             _workerThread.request_stop();
         }
     }
@@ -81,7 +92,7 @@ void Pipeline::WorkerMain(std::stop_token stopToken)
 
     while (!stopToken.stop_requested() || (GetState() == TStateMachineState::Stopping_Gracefully))
     {
-        const auto expectedEvents = _queue->WaitAndPopBatch(eventsBatchBuffer);
+        const auto expectedEvents = _queue->WaitAndPop(eventsBatchBuffer, _tickClock->GetCurrentTick(), stopToken);
 
         if (!expectedEvents)
         {
@@ -91,20 +102,41 @@ void Pipeline::WorkerMain(std::stop_token stopToken)
                 assert(false && "Pipeline passed invalid arguments to Queue::WaitAndPopBatch.");
                 break;
 
-            case QueueTypes::Error::queue_not_started_or_shut_down:
-                break;
-
             case QueueTypes::Error::internal_error:
                 assert(false && "Queue::WaitAndPopBatch encountered an internal error.");
+                break;
+
+            case QueueTypes::Error::queue_not_started_or_shut_down:
+                assert(false && "Broken logic and contract between Pipeline & Queue: queue's state changes should initiate and hense be synced with the pipeline.");
+                break;
+
+            case QueueTypes::Error::operation_cancelled:
+                assert(stopToken.stop_requested() && "Broken logic and contract between Pipeline & Queue.");
+                break;
+
+            default:
+                assert(false && "Unsupported QueueTypes::Error found inside Pipeline::WorkerMain.");
                 break;
             }
 
             break;
         }
 
+        std::sort(expectedEvents.value().begin(), expectedEvents.value().end(), [](const EventTypes::Event& lEvent, const EventTypes::Event& rEvent)
+            {
+                return std::tie(lEvent.tick, lEvent.id) < std::tie(rEvent.tick, rEvent.id);
+            });
+
         const auto subscribers = _subscriptionRegistry.getSubscribedObjects(Pipeline::SubscriptionRegistryKey);
 
-        for (auto& currentSubscriber : subscribers)
+        if (!subscribers)
+        {
+            std::cerr << "Failed to fetch subscribers' list inside Pipeline::WorkerMain. Exitting pipeline loop." << '\n';
+            assert(false && "Failed to fetch subscribers' list inside Pipeline::WorkerMain. Exitting pipeline loop.");
+            break;
+        }
+
+        for (auto& currentSubscriber : subscribers.value())
         {
             try
             {
@@ -123,6 +155,8 @@ void Pipeline::WorkerMain(std::stop_token stopToken)
                 std::cerr << "Unknown non-std::exception thrown by subscriber.\n";
             }
         }
+
+        HAMEDSEYF_CPU_RELAX();
     }
 
     if (GetState() != TStateMachineState::Stopped)

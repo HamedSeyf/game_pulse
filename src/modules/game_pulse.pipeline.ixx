@@ -8,12 +8,15 @@ export module game_pulse.pipeline;
 import game_pulse.domain;
 import game_pulse.queue;
 
-import <string>;
+import <cstddef>;
+import <cstdint>;
 import <expected>;
 import <memory>;
 import <span>;
+import <string_view>;
 import <thread>;
 import <stop_token>;
+
 
 export
 {
@@ -27,13 +30,15 @@ export
             // `events`, and any pointer/reference derived from it, are valid only for the
             // duration of this call. A processor that needs the events afterward must copy
             // them into processor-owned storage before returning.
+            // events are sorted based on tick values and then their id values.
             virtual void ProcessEventsSynchronously(const std::span<const EventTypes::Event>& events) = 0;
             virtual ~ProcessorInterface() = default;
         };
 
         enum class Error
         {
-            UnRegisterFailed = 0,
+            processor_already_registered = 0,
+            processor_not_registered,
         };
     }
 
@@ -43,7 +48,7 @@ export
 
         using TProcessorHandle = std::uint64_t;
 
-        explicit Pipeline(std::shared_ptr<Queue> queue, const std::size_t batch_size);
+        explicit Pipeline(std::shared_ptr<TickClock> tickClock, std::shared_ptr<Queue> queue, const std::size_t batchSize);
         ~Pipeline();
 
         std::expected<TProcessorHandle, PipelineTypes::Error> RegisterProcessor(std::shared_ptr<PipelineTypes::ProcessorInterface> processor);
@@ -57,10 +62,11 @@ export
 
     private:
 
+        std::shared_ptr<TickClock> _tickClock;
         std::shared_ptr<Queue> _queue;
         std::size_t _batch_size;
 
-        inline static constexpr std::string_view SubscriptionRegistryKey = "PipelineEvents";
+        inline static constexpr std::string_view SubscriptionRegistryKey = "PipelineProcessors";
 
         TSubscriptionRegistry<std::shared_ptr<PipelineTypes::ProcessorInterface>, std::string_view, TProcessorHandle> _subscriptionRegistry;
 

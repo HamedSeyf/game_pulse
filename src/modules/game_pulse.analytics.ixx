@@ -4,41 +4,41 @@ module;
 
 export module game_pulse.analytics;
 
+import game_pulse.domain;
 import game_pulse.pipeline;
 
-import <atomic>;
-import <expected>;
-import <memory>;
+import <shared_mutex>;
+import <span>;
+import <unordered_map>;
+
 
 export
 {
 
     namespace AnalyticsType
     {
+        using TPlayerStatusMap = std::unordered_map<T_ID, SnapshotTypes::PlayerStatus>;
+
         struct AnalyticsSnapshot
         {
-
+            TPlayerStatusMap playersStatus;
         };
     }
 
-    class Analytics : public TStateMachine<>, public PipelineTypes::ProcessorInterface
+    class Analytics : public PipelineTypes::ProcessorInterface
     {
     public:
 
-        virtual [[nodiscard]] AnalyticsType::AnalyticsSnapshot GetSnapshot() const;
+        [[nodiscard]] virtual AnalyticsType::AnalyticsSnapshot GetSnapshot() const;
 
         // PipelineTypes::ProcessorInterface override(s)
         virtual void ProcessEventsSynchronously(const std::span<const EventTypes::Event>& events) override;
 
     protected:
 
-        virtual void OnStateTransitionLocked(const TStateMachineState newState) noexcept override;
+        mutable std::shared_mutex _mutex;
 
-    private:
-
-        std::jthread _workerThread;
-
-        void WorkerMain(std::stop_token stopToken);
+        AnalyticsType::TPlayerStatusMap _playersStatus;
     };
 
 }

@@ -13,7 +13,6 @@ add_subdirectory(submodules/hamed_common)
 
 add_executable(game_pulse
 	src/main.cpp
-	src/implementation/domain.cpp
 	src/implementation/queue.cpp
 	src/implementation/pipeline.cpp
 	src/implementation/analytics.cpp
