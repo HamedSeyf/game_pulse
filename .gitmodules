@@ -1,3 +1,6 @@
 [submodule "hamed_common"]
 	path = submodules/hamed_common
 	url = https://github.com/HamedSeyf/hamed-cpp-common.git
+[submodule "submodules/spdlog"]
+	path = submodules/spdlog
+	url = https://github.com/gabime/spdlog.git

@@ -10,6 +10,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_UNITY_BUILD OFF)
 
 add_subdirectory(submodules/hamed_common)
+add_subdirectory(submodules/spdlog)
 
 add_executable(game_pulse
 	src/main.cpp
@@ -17,12 +18,13 @@ add_executable(game_pulse
 	src/implementation/pipeline.cpp
 	src/implementation/analytics.cpp
 	src/implementation/reporting.cpp
-	src/implementation/simulation.cpp
+	src/implementation/simulator.cpp
 )
 
 target_link_libraries(game_pulse
 	PRIVATE
 		hamed_common
+        spdlog::spdlog
 )
 
 target_sources(game_pulse
@@ -34,7 +36,7 @@ target_sources(game_pulse
 			src/modules/game_pulse.pipeline.ixx
 			src/modules/game_pulse.analytics.ixx
 			src/modules/game_pulse.reporting.ixx
-			src/modules/game_pulse.simulation.ixx
+			src/modules/game_pulse.simulator.ixx
 )
 
 if (MSVC)

@@ -1,7 +1,10 @@
+module;
+
+#include <spdlog/spdlog.h>
+
 module game_pulse.analytics;
 
 import <cassert>;
-import <iostream>;
 
 
 AnalyticsType::AnalyticsSnapshot Analytics::GetSnapshot() const
@@ -25,6 +28,8 @@ void Analytics::ProcessEventsSynchronously(const std::span<const EventTypes::Eve
         {
         case EventTypes::EventType::Spawn:
         {
+            spdlog::debug("Analytics processing event: [Spawn] PlayerID: {} Position: [{}, {}]", currentEvent.spawn.playerId, currentEvent.spawn.position[0], currentEvent.spawn.position[1]);
+            
             const auto foundPlayer = _playersStatus.find(currentEvent.spawn.playerId);
             if (foundPlayer == _playersStatus.end() || foundPlayer->second.health == 0)
             {
@@ -34,21 +39,21 @@ void Analytics::ProcessEventsSynchronously(const std::span<const EventTypes::Eve
                 }
                 catch (const std::exception& e)
                 {
+                    spdlog::error("{}", e.what());
                     assert(false && "Allocation failed inside Analytics::ProcessEventsSynchronously.");
-                    // For now we keep it to a simple cerr as proper logging is not within the scope of this code demonstration
-                    std::cerr << e.what() << '\n';
                 }
                 catch (...)
                 {
+                    spdlog::error("Unknown non-std::exception thrown inside Analytics::ProcessEventsSynchronously.");
                     assert(false && "Allocation failed inside Analytics::ProcessEventsSynchronously.");
-                    // For now we keep it to a simple cerr as proper logging is not within the scope of this code demonstration
-                    std::cerr << "Unknown non-std::exception thrown inside Analytics::ProcessEventsSynchronously.\n";
                 }
             }
             break;
         }
         case EventTypes::EventType::Move:
         {
+            spdlog::debug("Analytics processing event: [Move] PlayerID: {} Position: [{}, {}]", currentEvent.move.playerId, currentEvent.move.position[0], currentEvent.move.position[1]);
+
             const auto foundPlayer = _playersStatus.find(currentEvent.move.playerId);
             if (foundPlayer != _playersStatus.end() && foundPlayer->second.health > 0)
             {
@@ -58,6 +63,8 @@ void Analytics::ProcessEventsSynchronously(const std::span<const EventTypes::Eve
         }
         case EventTypes::EventType::Shot:
         {
+            spdlog::debug("Analytics processing event: [Shot] PlayerID: {} TargetID: {} Damage: {}", currentEvent.shot.shooterId, currentEvent.shot.targetId, currentEvent.shot.damage);
+
             const auto foundPlayer_Shooter = _playersStatus.find(currentEvent.shot.shooterId);
             const auto foundPlayer_Target = _playersStatus.find(currentEvent.shot.targetId);
             if (foundPlayer_Shooter != _playersStatus.end() && foundPlayer_Shooter->second.health > 0 &&

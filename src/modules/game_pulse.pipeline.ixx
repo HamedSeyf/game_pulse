@@ -37,7 +37,8 @@ export
 
         enum class Error
         {
-            processor_already_registered = 0,
+            bad_arguments = 0,
+            processor_already_registered,
             processor_not_registered,
         };
     }

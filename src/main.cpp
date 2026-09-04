@@ -2,17 +2,19 @@
 #include <algorithm>
 #include <cassert>
 #include <charconv>
-#include <iostream>
 #include <vector>
 #include <memory>
 #include <string_view>
 #include <system_error>
 
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/basic_file_sink.h>
+
 import game_pulse.analytics;
 import game_pulse.domain;
 import game_pulse.pipeline;
 import game_pulse.queue;
-import game_pulse.simulation;
+import game_pulse.simulator;
 
 template <typename T>
 concept ChronoDuration =
@@ -117,6 +119,12 @@ int main(int argc, char** argv)
         }
     }
 
+    auto logger = spdlog::basic_logger_mt("gamepulse", "gamepulse.log", true);
+    spdlog::set_default_logger(std::move(logger));
+    spdlog::set_level(spdlog::level::debug);
+    spdlog::flush_every(std::chrono::milliseconds{ 500 });
+    spdlog::flush_on(spdlog::level::err);
+
     try
     {
         std::shared_ptr<TickClock> tickClock = std::make_shared<TickClock>(cfg->tick_duration);
@@ -140,15 +148,15 @@ int main(int argc, char** argv)
                 return GlobalID::NextID();
             });      
 
-        const SimulationTypes::TEventGenerationWeights eventGenerationWeights{
+        const SimulatorTypes::TEventGenerationWeights eventGenerationWeights{
             .spawnWeight = 0.10,
             .moveWeight = 0.40,
             .shotWeight = 0.30,
             .noEventWeight = 0.20,
         };
-        constexpr std::uint64_t masterSimulationSeed = 0x5EED'2026ULL;
+        constexpr std::uint64_t masterSimulatorSeed = 0x5EED'2026ULL;
 
-        std::vector<std::shared_ptr<Simulation>> simulators;
+        std::vector<std::shared_ptr<Simulator>> simulators;
         simulators.reserve(cfg->player_count);
 
         for (const auto currentPlayerId : playerIDs)
@@ -157,14 +165,14 @@ int main(int argc, char** argv)
 
             std::erase(otherPlayerIDs, currentPlayerId);
 
-            std::shared_ptr<Simulation> simulator = std::make_shared<Simulation>
+            std::shared_ptr<Simulator> simulator = std::make_shared<Simulator>
                 (
                     tickClock,
                     queue,
                     currentPlayerId,
                     otherPlayerIDs,
                     eventGenerationWeights,
-                    masterSimulationSeed + currentPlayerId
+                    masterSimulatorSeed + currentPlayerId
                 );
 
             simulators.push_back(simulator);
@@ -178,7 +186,7 @@ int main(int argc, char** argv)
 
         for (auto& currentSimulator : simulators)
         {
-            if (const auto result = currentSimulator->SwitchToState(SimulationTypes::TSimulationStateMachineState::InProgress); !result)
+            if (const auto result = currentSimulator->SwitchToState(SimulatorTypes::TSimulatorStateMachineState::InProgress); !result)
             {
                 assert(false && "Failed to start simulator(s).");
                 return 0;
@@ -195,18 +203,18 @@ int main(int argc, char** argv)
     }
     catch (const std::exception& e)
     {
+        spdlog::error("{}", e.what());
         assert(false && "Failed to instantiate and/or start.");
-        // For now we keep it to a simple cerr as proper logging is not within the scope of this code demonstration
-        std::cerr << e.what() << '\n';
         return 0;
     }
     catch (...)
     {
+        spdlog::error("Unknown non-std::exception thrown inside main().");
         assert(false && "Failed to instantiate and/or start.");
-        // For now we keep it to a simple cerr as proper logging is not within the scope of this code demonstration
-        std::cerr << "Unknown non-std::exception thrown inside main().\n";
         return 0;
     }
+
+    spdlog::shutdown();
 
     return 1;
 }

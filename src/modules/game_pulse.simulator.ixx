@@ -2,7 +2,7 @@ module;
 
 #include "hamed_common/generic_types.h"
 
-export module game_pulse.simulation;
+export module game_pulse.simulator;
 
 import game_pulse.domain;
 import game_pulse.queue;
@@ -18,9 +18,9 @@ import <vector>;
 export
 {
 
-    namespace SimulationTypes
+    namespace SimulatorTypes
     {
-        enum class TSimulationStateMachineState
+        enum class TSimulatorStateMachineState
         {
             NotStarted = 0,
             InProgress,
@@ -36,30 +36,30 @@ export
         };
     }
 
-    class Simulation :
-        public TStateMachine<SimulationTypes::TSimulationStateMachineState>,
-        public QueueTypes::SimulationInterface,
-        public std::enable_shared_from_this<Simulation>
+    class Simulator :
+        public TStateMachine<SimulatorTypes::TSimulatorStateMachineState>,
+        public QueueTypes::SimulatorInterface,
+        public std::enable_shared_from_this<Simulator>
     {
     public:
 
-        explicit Simulation(
+        explicit Simulator(
             std::shared_ptr<TickClock> tickClock,
             std::shared_ptr<Queue> queue,
             T_ID playerID,
             const std::span<T_ID> otherPlayerIDs,
-            SimulationTypes::TEventGenerationWeights eventGenerationWeights,
+            SimulatorTypes::TEventGenerationWeights eventGenerationWeights,
             std::uint64_t randomSeed);
 
         // TODO: added this so to make sure the recently added queue handle is not copyable. Anything missing?
-        Simulation(const Simulation&) = delete;
+        Simulator(const Simulator&) = delete;
 
         // TODO: what do you think of this operator quality?
-        virtual bool operator==([[maybe_unused]] const QueueTypes::SimulationInterface& other) const override { return true; }// TODO _playerID == other._playerID && _queueRegistrationHandle == other._queueRegistrationHandle;
+        virtual bool operator==([[maybe_unused]] const QueueTypes::SimulatorInterface& other) const override { return true; }// TODO _playerID == other._playerID && _queueRegistrationHandle == other._queueRegistrationHandle;
 
     protected:
 
-        void OnStateTransitionLocked(const SimulationTypes::TSimulationStateMachineState newState) noexcept override;
+        void OnStateTransitionLocked(const SimulatorTypes::TSimulatorStateMachineState newState) noexcept override;
 
     private:
 
@@ -91,7 +91,7 @@ export
 
         void WorkerMain(std::stop_token stopToken);
 
-        [[nodiscard]] static TEventGenerationCutoffs BuildEventGenerationCutoffs(const SimulationTypes::TEventGenerationWeights& weights);
+        [[nodiscard]] static TEventGenerationCutoffs BuildEventGenerationCutoffs(const SimulatorTypes::TEventGenerationWeights& weights);
         [[nodiscard]] std::optional<EventTypes::Event> CreateRandomEvent(const TickClock::Tick tick);
 
     };

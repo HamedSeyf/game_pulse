@@ -1,6 +1,10 @@
+module;
+
+#include <spdlog/spdlog.h>
+
 module game_pulse.queue;
 
-import game_pulse.simulation;
+import game_pulse.simulator;
 
 import <cassert>;
 import <mutex>;
@@ -22,20 +26,21 @@ std::size_t Queue::GetSize() const
     return _events_queue.size();
 }
 
-std::expected<Queue::TSimulatorHandle, QueueTypes::Error> Queue::RegisterSimulator(std::shared_ptr<QueueTypes::SimulationInterface> simulator)
+std::expected<Queue::TSimulatorHandle, QueueTypes::Error> Queue::RegisterSimulator(std::shared_ptr<QueueTypes::SimulatorInterface> simulator)
 {
     if (!simulator)
     {
         return std::unexpected{ QueueTypes::Error::bad_arguments };
     }
 
+    TSimulatorHandle registeredHandle{};
     SimulatorEntry newSimulatorEntry{ std::move(simulator), std::make_shared<std::optional<T_Tick>>(std::nullopt) };
 
     {
         // TODO: since RegisterSimulator is not called occasionally and supposed to mostly be called right at the beginning of the pipeline, we use _state_mutex to assure two overlapping RegisterSimulator calls are not racing as long as one is dealing with the subscription. Thoughts?
         std::unique_lock lock{ _state_mutex };
 
-        const auto foundSimulator = _subscriptionRegistry.forEachSubscribedObject(Queue::SubscriptionRegistryKey, [&simulator](const auto& currentSimulatorEntry)
+        const bool foundSimulator = _subscriptionRegistry.forEachSubscribedObject(Queue::SubscriptionRegistryKey, [&simulator](const auto& currentSimulatorEntry)
             {
                 return (currentSimulatorEntry.simulator == simulator);
             });
@@ -45,13 +50,18 @@ std::expected<Queue::TSimulatorHandle, QueueTypes::Error> Queue::RegisterSimulat
             return std::unexpected{ QueueTypes::Error::simulator_already_registered };
         }
 
-        return { _subscriptionRegistry.subscribe(newSimulatorEntry, Queue::SubscriptionRegistryKey) };
+        registeredHandle = _subscriptionRegistry.subscribe(newSimulatorEntry, Queue::SubscriptionRegistryKey);
     }
+
+    spdlog::info("Queue successfully registered simulator with handle: {}", registeredHandle);
+
+    return { std::move(registeredHandle) };
 }
 
 std::expected<void, QueueTypes::Error> Queue::UnRegisterSimulator(const TSimulatorHandle& handle)
 {
     const bool success = _subscriptionRegistry.unsubscribe(handle);
+    spdlog::info("Queue's unregister call result: {} Handle: {}", success, handle);
     return success ? std::expected<void, QueueTypes::Error>{} : std::unexpected{ QueueTypes::Error::simulator_not_registered };
 }
 
@@ -188,7 +198,7 @@ std::expected<void, QueueTypes::Error> Queue::UpdateSimulatorWatermark(T_ID simu
             return std::unexpected{ QueueTypes::Error::queue_not_started_or_shut_down };
         }
 
-        if (!UpdateSimulatorWatermarkUnlocked(std::move(simulatorId), std::move(completedThroughTick)))
+        if (!UpdateSimulatorWatermarkUnlocked(simulatorId, completedThroughTick))
         {
             return std::unexpected{ QueueTypes::Error::regressing_watermark_passed };
         }
@@ -196,11 +206,15 @@ std::expected<void, QueueTypes::Error> Queue::UpdateSimulatorWatermark(T_ID simu
 
     _queue_pop_cv.notify_one();
 
+    spdlog::debug("Queue successfully updated simulator's watermark. SimulatorId: {} Watermark: {}", std::move(simulatorId), std::move(completedThroughTick));
+
     return {};
 }
 
 void Queue::OnStateTransitionLocked(const TStateMachineState newState) noexcept
 {
+    spdlog::info("Queue transitioned to new state. State: {}", std::to_underlying(newState));
+
     TStateMachine::OnStateTransitionLocked(newState);
 
     if (newState == TStateMachineState::Stopped)

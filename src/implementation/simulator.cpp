@@ -1,19 +1,23 @@
-module game_pulse.simulation;
+module;
+
+#include <spdlog/spdlog.h>
+
+module game_pulse.simulator;
 
 import game_pulse.pipeline;
 import game_pulse.queue;
 
 import <cassert>;
-import <iostream>;
 import <optional>;
+import <utility>;
 
 
-Simulation::Simulation(
+Simulator::Simulator(
     std::shared_ptr<TickClock> tickClock,
     std::shared_ptr<Queue> queue,
     T_ID playerID,
     const std::span<T_ID> otherPlayerIDs,
-    SimulationTypes::TEventGenerationWeights eventGenerationWeights,
+    SimulatorTypes::TEventGenerationWeights eventGenerationWeights,
     std::uint64_t randomSeed
 )
     :
@@ -28,11 +32,11 @@ Simulation::Simulation(
 {
     if (!_tickClock || !_queue || otherPlayerIDs.empty())
     {
-        throw std::invalid_argument{ "Invalid tickClock, queue or otherPlayerIDs passed to Simulation's ctor." };
+        throw std::invalid_argument{ "Invalid tickClock, queue or otherPlayerIDs passed to Simulator's ctor." };
     }
 }
 
-Simulation::TEventGenerationCutoffs Simulation::BuildEventGenerationCutoffs(const SimulationTypes::TEventGenerationWeights& weights)
+Simulator::TEventGenerationCutoffs Simulator::BuildEventGenerationCutoffs(const SimulatorTypes::TEventGenerationWeights& weights)
 {
     const auto isValidWeight = [](const double weight) noexcept
         {
@@ -44,9 +48,7 @@ Simulation::TEventGenerationCutoffs Simulation::BuildEventGenerationCutoffs(cons
         !isValidWeight(weights.shotWeight) ||
         !isValidWeight(weights.noEventWeight))
     {
-        throw std::invalid_argument{
-            "Event-generation weights must be finite and nonnegative."
-        };
+        throw std::invalid_argument{"Event-generation weights must be finite and nonnegative."};
     }
 
     const double totalWeight =
@@ -57,9 +59,7 @@ Simulation::TEventGenerationCutoffs Simulation::BuildEventGenerationCutoffs(cons
 
     if (!std::isfinite(totalWeight) || totalWeight <= 0.0)
     {
-        throw std::invalid_argument{
-            "Event-generation weights must have a positive finite total."
-        };
+        throw std::invalid_argument{"Event-generation weights must have a positive finite total."};
     }
 
     const double inverseTotal = 1.0 / totalWeight;
@@ -77,7 +77,7 @@ Simulation::TEventGenerationCutoffs Simulation::BuildEventGenerationCutoffs(cons
     };
 }
 
-std::optional<EventTypes::Event> Simulation::CreateRandomEvent(const TickClock::Tick tick)
+std::optional<EventTypes::Event> Simulator::CreateRandomEvent(const TickClock::Tick tick)
 {
     const double sample = _unitDistribution(_randomEngine);
 
@@ -136,13 +136,15 @@ std::optional<EventTypes::Event> Simulation::CreateRandomEvent(const TickClock::
     return std::nullopt;
 }
 
-void Simulation::OnStateTransitionLocked(const SimulationTypes::TSimulationStateMachineState newState) noexcept
+void Simulator::OnStateTransitionLocked(const SimulatorTypes::TSimulatorStateMachineState newState) noexcept
 {
+    spdlog::info("Simulator transitioned to new state. PlayerID: {} State: {}", _playerID, std::to_underlying(newState));
+
     TStateMachine::OnStateTransitionLocked(newState);
 
     try
     {
-        if (newState == SimulationTypes::TSimulationStateMachineState::InProgress)
+        if (newState == SimulatorTypes::TSimulatorStateMachineState::InProgress)
         {
             if (const auto result = _queue->RegisterSimulator(shared_from_this()); result)
             {
@@ -150,7 +152,8 @@ void Simulation::OnStateTransitionLocked(const SimulationTypes::TSimulationState
             }
             else
             {
-                throw std::invalid_argument{ "Simulation failed to register with queue." };
+                spdlog::error("Simulator failed to register with queue. PlayerID: {}", _playerID);
+                return;
             }
 
             _workerThread = std::jthread([this](std::stop_token stopToken)
@@ -159,22 +162,22 @@ void Simulation::OnStateTransitionLocked(const SimulationTypes::TSimulationState
                 }
             );
         }
-        else if (newState == SimulationTypes::TSimulationStateMachineState::Stopped)
+        else if (newState == SimulatorTypes::TSimulatorStateMachineState::Stopped)
         {
             _workerThread.request_stop();
         }
     }
     catch (const std::exception& e)
     {
-        std::cerr << e.what() << '\n';
+        spdlog::error("{}", e.what());
     }
     catch (...)
     {
-        std::cerr << "Unknown non-std::exception thrown inside Simulation::OnStateTransitionLocked.\n";
+        spdlog::error("Unknown non-std::exception thrown inside Simulator::OnStateTransitionLocked.");
     }
 }
 
-void Simulation::WorkerMain(std::stop_token stopToken)
+void Simulator::WorkerMain(std::stop_token stopToken)
 {
     std::mutex tickWaitMutex;
     std::condition_variable_any tickWaitCV;
@@ -194,14 +197,18 @@ void Simulation::WorkerMain(std::stop_token stopToken)
                         break;
                     }
 
-                    std::cerr << "Simulation failed to push the created event to queue. Exitting this simulator.\n";
+                    spdlog::error("Simulator failed to push the created event to queue. Exitting this simulator.");
                     assert(false);
                     break;
+                }
+                else
+                {
+                    spdlog::debug("Simulator successfully pushed event to queue. PlayerID: {} EventID: {}", _playerID, RandomEvent->id);
                 }
             }
             else if (!_queue->UpdateSimulatorWatermark(_queueRegistrationHandle.value(), tick))
             {
-                std::cerr << "Simulator failed to update queue with its latest watermark.\n";
+                spdlog::error("Simulator failed to update queue with its latest watermark.");
                 assert(false);
                 break;
             }
@@ -224,15 +231,15 @@ void Simulation::WorkerMain(std::stop_token stopToken)
         }
         catch (const std::exception& e)
         {
-            std::cerr << e.what() << '\n';
+            spdlog::error("{}", e.what());
             break;
         }
         catch (...)
         {
-            std::cerr << "Unknown non-std::exception thrown inside Simulation::WorkerMain.\n";
+            spdlog::error("Unknown non-std::exception thrown inside Simulator::WorkerMain.");
             break;
         }
     }
 
-    SwitchToState(SimulationTypes::TSimulationStateMachineState::Stopped);
+    SwitchToState(SimulatorTypes::TSimulatorStateMachineState::Stopped);
 }

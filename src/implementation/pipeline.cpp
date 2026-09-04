@@ -2,13 +2,14 @@ module;
 
 #include "hamed_common/platform.h"
 
+#include <spdlog/spdlog.h>
+
 module game_pulse.pipeline;
 
 import game_pulse.queue;
 
 import <algorithm>;
 import <cassert>;
-import <iostream>;
 import <tuple>;
 
 
@@ -29,23 +30,38 @@ Pipeline::~Pipeline()
 
 std::expected<Pipeline::TProcessorHandle, PipelineTypes::Error> Pipeline::RegisterProcessor(std::shared_ptr<PipelineTypes::ProcessorInterface> processor)
 {
-    // TODO: do we need a locking mechanism here as well similar to Queue?
-    const bool foundElement = _subscriptionRegistry.forEachSubscribedObject(Pipeline::SubscriptionRegistryKey, [&processor](const auto& currentProcessor)
-        {
-            return (currentProcessor == processor);
-        });
-
-    if (foundElement)
+    if (!processor)
     {
-        return std::unexpected{ PipelineTypes::Error::processor_already_registered };
+        return std::unexpected{ PipelineTypes::Error::bad_arguments };
     }
 
-    return { _subscriptionRegistry.subscribe(processor, Pipeline::SubscriptionRegistryKey) };
+    TProcessorHandle registeredHandle{};
+
+    {
+        std::unique_lock lock{ _state_mutex };
+
+        const bool foundElement = _subscriptionRegistry.forEachSubscribedObject(Pipeline::SubscriptionRegistryKey, [&processor](const auto& currentProcessor)
+            {
+                return (currentProcessor == processor);
+            });
+
+        if (foundElement)
+        {
+            return std::unexpected{ PipelineTypes::Error::processor_already_registered };
+        }
+
+        registeredHandle = _subscriptionRegistry.subscribe(processor, Pipeline::SubscriptionRegistryKey);
+    }
+
+    spdlog::info("Pipeline successfully registered processor.");
+
+    return { std::move(registeredHandle) };
 }
 
 std::expected<void, PipelineTypes::Error> Pipeline::UnRegisterProcessor(const TProcessorHandle& handle)
 {
     const bool success = _subscriptionRegistry.unsubscribe(handle);
+    spdlog::info("Pipeline's unregister call result: {} Handle: {}", success, handle);
     return success ? std::expected<void, PipelineTypes::Error>{} : std::unexpected{ PipelineTypes::Error::processor_not_registered };
 }
 
@@ -59,6 +75,8 @@ void Pipeline::JoinAndWait()
 
 void Pipeline::OnStateTransitionLocked(const TStateMachineState newState) noexcept
 {
+    spdlog::info("Pipeline transitioned to new state. State: {}", std::to_underlying(newState));
+
     TStateMachine::OnStateTransitionLocked(newState);
 
     try
@@ -78,11 +96,11 @@ void Pipeline::OnStateTransitionLocked(const TStateMachineState newState) noexce
     }
     catch (const std::exception& e)
     {
-        std::cerr << e.what() << '\n';
+        spdlog::error("{}", e.what());
     }
     catch (...)
     {
-        std::cerr << "Unknown non-std::exception thrown inside Pipeline::OnStateTransitionLocked.\n";
+        spdlog::error("Unknown non-std::exception thrown inside Pipeline::OnStateTransitionLocked.");
     }
 }
 
@@ -122,6 +140,8 @@ void Pipeline::WorkerMain(std::stop_token stopToken)
             break;
         }
 
+        spdlog::debug("Pipeline successfully popped {} events from the queue.", expectedEvents.value().size());
+
         std::sort(expectedEvents.value().begin(), expectedEvents.value().end(), [](const EventTypes::Event& lEvent, const EventTypes::Event& rEvent)
             {
                 return std::tie(lEvent.tick, lEvent.id) < std::tie(rEvent.tick, rEvent.id);
@@ -131,7 +151,7 @@ void Pipeline::WorkerMain(std::stop_token stopToken)
 
         if (!subscribers)
         {
-            std::cerr << "Failed to fetch subscribers' list inside Pipeline::WorkerMain. Exitting pipeline loop." << '\n';
+            spdlog::error("Failed to fetch subscribers' list inside Pipeline::WorkerMain. Exitting pipeline loop.");
             assert(false && "Failed to fetch subscribers' list inside Pipeline::WorkerMain. Exitting pipeline loop.");
             break;
         }
@@ -144,15 +164,13 @@ void Pipeline::WorkerMain(std::stop_token stopToken)
             }
             catch (const std::exception& e)
             {
+                spdlog::error("{}", e.what());
                 assert(false && "Subscribers are supposed to gracefully handle events without throwing.");
-                // For now we keep it to a simple cerr as proper logging is not within the scope of this code demonstration
-                std::cerr << e.what() << '\n';
             }
             catch (...)
             {
+                spdlog::error("Unknown non-std::exception thrown by subscriber.");
                 assert(false && "Subscribers are supposed to gracefully handle events without throwing.");
-                // For now we keep it to a simple cerr as proper logging is not within the scope of this code demonstration
-                std::cerr << "Unknown non-std::exception thrown by subscriber.\n";
             }
         }
 
