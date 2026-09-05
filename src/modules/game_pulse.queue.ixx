@@ -28,12 +28,6 @@ export
 
     namespace QueueTypes
     {
-        
-        class SimulatorInterface
-        {
-        public:
-            virtual bool operator==(const SimulatorInterface& other) const = 0;
-        };
 
         enum class Error
         {
@@ -58,7 +52,7 @@ export
         [[nodiscard]] std::size_t GetSize() const;
         [[nodiscard]] std::size_t GetCapacity() const noexcept { return _events_queue.capacity(); }
 
-        std::expected<TSimulatorHandle, QueueTypes::Error> RegisterSimulator(std::shared_ptr<QueueTypes::SimulatorInterface> simulator);
+        std::expected<TSimulatorHandle, QueueTypes::Error> RegisterSimulator(T_ID simulatorID);
         std::expected<void, QueueTypes::Error> UnRegisterSimulator(const TSimulatorHandle& handle);
 
         std::expected<void, QueueTypes::Error> WaitAndPush(TSimulatorHandle simulatorHandle, EventTypes::Event event, T_Tick completedThroughTick, std::stop_token stopToken);
@@ -76,9 +70,7 @@ export
 
         struct SimulatorEntry
         {
-            // TODO: work on all these shared contracts between simulator and queue. Need to make some of them weak
-            std::shared_ptr<QueueTypes::SimulatorInterface> simulator;
-
+            T_ID simulatorID;
             std::shared_ptr<std::optional<T_Tick>> completedThroughTick;
         };
 
@@ -95,6 +87,7 @@ export
 
         // Returns whether or not the value has advanced
         bool UpdateSimulatorWatermarkUnlocked(TSimulatorHandle simulatorHandle, T_Tick completedThroughTick);
+        T_Tick GetSimulatorsThroughTick() const;
 
     };
 

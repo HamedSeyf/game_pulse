@@ -69,7 +69,7 @@ export
 
         inline static constexpr std::string_view SubscriptionRegistryKey = "PipelineProcessors";
 
-        TSubscriptionRegistry<std::shared_ptr<PipelineTypes::ProcessorInterface>, std::string_view, TProcessorHandle> _subscriptionRegistry;
+        TSubscriptionRegistry<std::weak_ptr<PipelineTypes::ProcessorInterface>, std::string_view, TProcessorHandle> _subscriptionRegistry;
 
         std::jthread _workerThread;
 

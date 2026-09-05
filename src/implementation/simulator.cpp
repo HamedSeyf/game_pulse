@@ -146,7 +146,7 @@ void Simulator::OnStateTransitionLocked(const SimulatorTypes::TSimulatorStateMac
     {
         if (newState == SimulatorTypes::TSimulatorStateMachineState::InProgress)
         {
-            if (const auto result = _queue->RegisterSimulator(shared_from_this()); result)
+            if (const auto result = _queue->RegisterSimulator(_playerID); result)
             {
                 _queueRegistrationHandle = result.value();
             }
@@ -169,10 +169,12 @@ void Simulator::OnStateTransitionLocked(const SimulatorTypes::TSimulatorStateMac
     }
     catch (const std::exception& e)
     {
+        UnregisterFromQueue();
         spdlog::error("{}", e.what());
     }
     catch (...)
     {
+        UnregisterFromQueue();
         spdlog::error("Unknown non-std::exception thrown inside Simulator::OnStateTransitionLocked.");
     }
 }
@@ -190,7 +192,7 @@ void Simulator::WorkerMain(std::stop_token stopToken)
         {
             if (const auto RandomEvent = CreateRandomEvent(tick); RandomEvent)
             {
-                if (const auto result = _queue->WaitAndPush(_playerID, RandomEvent.value(), tick, stopToken); !result)
+                if (const auto result = _queue->WaitAndPush(_queueRegistrationHandle.value(), RandomEvent.value(), tick, stopToken); !result)
                 {
                     if (stopToken.stop_requested() && result.error() == QueueTypes::Error::operation_cancelled)
                     {
@@ -242,4 +244,31 @@ void Simulator::WorkerMain(std::stop_token stopToken)
     }
 
     SwitchToState(SimulatorTypes::TSimulatorStateMachineState::Stopped);
+
+    UnregisterFromQueue();
+}
+
+void Simulator::UnregisterFromQueue()
+{
+    try
+    {
+        if (_queue && _queueRegistrationHandle)
+        {
+            if (const auto result = _queue->UnRegisterSimulator(_queueRegistrationHandle.value()); !result)
+            {
+                spdlog::error("Failed to unregister simulator from queue. PlayerID: {}", _playerID);
+            }
+        }
+    }
+    catch (const std::exception& e)
+    {
+        spdlog::error("{}", e.what());
+    }
+    catch (...)
+    {
+        spdlog::error("Unknown non-std::exception thrown inside Simulator::UnregisterFromQueue.");
+    }
+
+    _queue.reset();
+    _queueRegistrationHandle.reset();
 }

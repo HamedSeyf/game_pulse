@@ -36,10 +36,7 @@ export
         };
     }
 
-    class Simulator :
-        public TStateMachine<SimulatorTypes::TSimulatorStateMachineState>,
-        public QueueTypes::SimulatorInterface,
-        public std::enable_shared_from_this<Simulator>
+    class Simulator : public TStateMachine<SimulatorTypes::TSimulatorStateMachineState>
     {
     public:
 
@@ -50,12 +47,6 @@ export
             const std::span<T_ID> otherPlayerIDs,
             SimulatorTypes::TEventGenerationWeights eventGenerationWeights,
             std::uint64_t randomSeed);
-
-        // TODO: added this so to make sure the recently added queue handle is not copyable. Anything missing?
-        Simulator(const Simulator&) = delete;
-
-        // TODO: what do you think of this operator quality?
-        virtual bool operator==([[maybe_unused]] const QueueTypes::SimulatorInterface& other) const override { return true; }// TODO _playerID == other._playerID && _queueRegistrationHandle == other._queueRegistrationHandle;
 
     protected:
 
@@ -77,7 +68,6 @@ export
             
         std::shared_ptr<Queue> _queue;
 
-        // TODO: need to cover unregister from queue and setting this back to null
         std::optional<Queue::TSimulatorHandle> _queueRegistrationHandle = std::nullopt;
 
         const TEventGenerationCutoffs _eventGenerationCutoffs;
@@ -93,6 +83,8 @@ export
 
         [[nodiscard]] static TEventGenerationCutoffs BuildEventGenerationCutoffs(const SimulatorTypes::TEventGenerationWeights& weights);
         [[nodiscard]] std::optional<EventTypes::Event> CreateRandomEvent(const TickClock::Tick tick);
+
+        void UnregisterFromQueue();
 
     };
 }

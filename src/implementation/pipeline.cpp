@@ -1,5 +1,6 @@
 module;
 
+#include "hamed_common/generic_types.h"
 #include "hamed_common/platform.h"
 
 #include <spdlog/spdlog.h>
@@ -40,9 +41,9 @@ std::expected<Pipeline::TProcessorHandle, PipelineTypes::Error> Pipeline::Regist
     {
         std::unique_lock lock{ _state_mutex };
 
-        const bool foundElement = _subscriptionRegistry.forEachSubscribedObject(Pipeline::SubscriptionRegistryKey, [&processor](const auto& currentProcessor)
+        const bool foundElement = _subscriptionRegistry.forEachSubscribedObject(Pipeline::SubscriptionRegistryKey, [&processor](auto& currentProcessor)
             {
-                return (currentProcessor == processor);
+                return PointersHaveSameControlBlock(currentProcessor, processor);
             });
 
         if (foundElement)
@@ -110,7 +111,8 @@ void Pipeline::WorkerMain(std::stop_token stopToken)
 
     while (!stopToken.stop_requested() || (GetState() == TStateMachineState::Stopping_Gracefully))
     {
-        const auto expectedEvents = _queue->WaitAndPop(eventsBatchBuffer, _tickClock->GetCurrentTick(), stopToken);
+        const TickClock::Tick targetTick = _tickClock->GetCurrentTick();
+        const auto expectedEvents = _queue->WaitAndPop(eventsBatchBuffer, targetTick, stopToken);
 
         if (!expectedEvents)
         {
@@ -140,7 +142,13 @@ void Pipeline::WorkerMain(std::stop_token stopToken)
             break;
         }
 
-        spdlog::debug("Pipeline successfully popped {} events from the queue.", expectedEvents.value().size());
+        spdlog::debug("Pipeline successfully popped {} events from the queue covering up to tick: {}", expectedEvents.value().size(), std::move(targetTick));
+
+        if (expectedEvents.value().empty())
+        {
+            HAMEDSEYF_CPU_RELAX();
+            continue;
+        }
 
         std::sort(expectedEvents.value().begin(), expectedEvents.value().end(), [](const EventTypes::Event& lEvent, const EventTypes::Event& rEvent)
             {
@@ -156,11 +164,21 @@ void Pipeline::WorkerMain(std::stop_token stopToken)
             break;
         }
 
+        // Since expiration is quite rare in current code's logic, it makes sense to potentially have another full pass on the subscription list and remove expired ones after the main for loop ends.
+        bool hasExpiredValues = false;
+
         for (auto& currentSubscriber : subscribers.value())
         {
             try
             {
-                currentSubscriber->ProcessEventsSynchronously(expectedEvents.value());
+                if (auto lockedSubscriber = currentSubscriber.lock())
+                {
+                    lockedSubscriber->ProcessEventsSynchronously(expectedEvents.value());
+                }
+                else
+                {
+                    hasExpiredValues = true;
+                }
             }
             catch (const std::exception& e)
             {
@@ -172,6 +190,14 @@ void Pipeline::WorkerMain(std::stop_token stopToken)
                 spdlog::error("Unknown non-std::exception thrown by subscriber.");
                 assert(false && "Subscribers are supposed to gracefully handle events without throwing.");
             }
+        }
+
+        if (hasExpiredValues)
+        {
+            _subscriptionRegistry.removeSubscribedObjectsIf(Pipeline::SubscriptionRegistryKey, [](const auto& currentProcessor)
+                {
+                    return currentProcessor.expired();
+                });
         }
 
         HAMEDSEYF_CPU_RELAX();
